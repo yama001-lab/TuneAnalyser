@@ -1,0 +1,12 @@
+{
+  "name": "tuneanalyser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "コントラバス練習用のリアルタイム・ピッチ＆倍音解析ツール",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "bench": "node test/bench.js",
+    "serve": "npx --yes http-server -c-1 -p 8080 ."
+  }
+}

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TuneAnalyser 検証版</title>
+<link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+<header>
+  <h1>TuneAnalyser <small>解析エンジン検証版</small></h1>
+</header>
+
+<section class="card">
+  <h2>入力</h2>
+  <div class="row">
+    <label>マイク <select id="device"><option value="">（既定のマイク）</option></select></label>
+    <button id="startMic" class="primary">マイク開始</button>
+  </div>
+  <div class="row">
+    <label>テスト信号
+      <select id="testNote">
+        <option value="23">B0 (30.9Hz)</option>
+        <option value="28" selected>E1 (41.2Hz)</option>
+        <option value="33">A1 (55.0Hz)</option>
+        <option value="38">D2 (73.4Hz)</option>
+        <option value="43">G2 (98.0Hz)</option>
+      </select>
+    </label>
+    <select id="testProfile">
+      <option value="bowed">倍音 0/-3/-6/-9/-12dB</option>
+      <option value="phone">基音が弱い 0/+20/+18/+15/+12dB</option>
+    </select>
+    <button id="startTest">テスト信号で開始</button>
+  </div>
+  <div class="row">
+    <label>基準 A4 = <input id="a4" type="number" min="415" max="466" step="1" value="440"> Hz</label>
+    <button id="stop">停止</button>
+  </div>
+  <p id="status" class="status">停止中</p>
+</section>
+
+<section class="card">
+  <h2>ピッチ</h2>
+  <div class="pitch">
+    <div id="note" class="note">--</div>
+    <div>
+      <div id="cents" class="cents">-- cent</div>
+      <div class="meter"><div id="centsBar" class="needle"></div></div>
+    </div>
+  </div>
+  <dl class="grid">
+    <dt>周波数</dt><dd id="freq">--</dd>
+    <dt>明瞭度</dt><dd id="clarity">--</dd>
+    <dt>入力レベル</dt><dd id="level">--</dd>
+    <dt>揺らぎ (直近1秒の標準偏差)</dt><dd id="stability">--</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <h2>倍音 1〜5次</h2>
+  <table class="harm">
+    <thead><tr><th>次数</th><th>周波数</th><th>基音比</th><th>割合</th><th class="barcol"></th></tr></thead>
+    <tbody id="harmonics"></tbody>
+  </table>
+  <p class="note-small" id="harmNote">「基音比」は1次を0dBとした相対レベル、「割合」は1〜5次の合計エネルギーに対する比率です。</p>
+</section>
+
+<section class="card">
+  <h2>遅延</h2>
+  <dl class="grid" id="latency"></dl>
+  <div class="row">
+    <button id="loopback">往復遅延を測る（スピーカー→マイク）</button>
+  </div>
+  <p class="note-small">スマホのスピーカーから短い「ピッ」を5回鳴らし、マイクで拾うまでの時間を測ります。音量を上げ、静かな場所で。USBマイク使用時は、その出力（ヘッドホン端子）から鳴る音をマイクに近づけてください。</p>
+  <p id="loopbackResult" class="status"></p>
+</section>
+
+<section class="card">
+  <h2>記録</h2>
+  <div class="row">
+    <button id="copy">計測結果をコピー</button>
+  </div>
+  <textarea id="report" readonly rows="6"></textarea>
+</section>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
