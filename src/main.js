@@ -17,6 +17,7 @@ const state = {
   trackSettings: null,
   deviceLabel: '',
   latest: null,
+  lastVoiced: null,    // 最後に音程が取れたフレーム（記録用）
   procTimes: [],       // 直近の処理時間(ms)
   hopIntervals: [],    // ブロック到着間隔(ms)
   lastArrival: 0,
@@ -67,6 +68,7 @@ async function setupContext() {
   state.procTimes = [];
   state.hopIntervals = [];
   state.history = [];
+  state.lastVoiced = null;
   state.lastArrival = 0;
   if (ctx.state !== 'running') await ctx.resume();
   return ctx;
@@ -154,8 +156,10 @@ function onBlock(ev) {
   const r = engine.analyze();
   pushLimited(state.procTimes, r.procMs, 300);
   state.latest = r;
-  if (r.voiced) {
-    state.history.push({ t: frame / engine.sampleRate, cents: r.note.cents, midi: r.note.midi });
+  if (r.voiced) state.lastVoiced = r;
+  // 揺らぎは、外れ値として捨てられなかったフレームだけで計算する
+  if (r.voiced && r.stable?.accepted) {
+    state.history.push({ t: frame / engine.sampleRate, cents: r.note.cents, midi: r.stable.note.midi });
   }
   const cutoff = frame / engine.sampleRate - 1;
   while (state.history.length && state.history[0].t < cutoff) state.history.shift();
@@ -272,17 +276,19 @@ function render() {
   requestAnimationFrame(render);
   const r = state.latest;
   const voiced = r?.voiced;
-  $('note').textContent = voiced ? r.note.name : '--';
-  $('note').classList.toggle('dim', !voiced);
-  $('cents').textContent = voiced ? `${r.note.cents >= 0 ? '+' : ''}${r.note.cents.toFixed(1)} cent` : '-- cent';
-  $('centsBar').style.left = voiced ? `${50 + Math.max(-50, Math.min(50, r.note.cents))}%` : '50%';
-  $('freq').textContent = r?.freq ? `${r.freq.toFixed(3)} Hz` : '--';
+  // 表示は外れ値除去・中央値をかけた stable を使う
+  const s = r?.stable;
+  $('note').textContent = s ? s.note.name : '--';
+  $('note').classList.toggle('dim', !s || s.held);
+  $('cents').textContent = s ? `${s.note.cents >= 0 ? '+' : ''}${s.note.cents.toFixed(1)} cent` : '-- cent';
+  $('centsBar').style.left = s ? `${50 + Math.max(-50, Math.min(50, s.note.cents))}%` : '50%';
+  $('freq').textContent = s ? `${s.freq.toFixed(3)} Hz（このフレーム ${r.freq ? r.freq.toFixed(3) : '--'}）` : '--';
   $('clarity').textContent = r?.freq ? r.clarity.toFixed(3) : '--';
   $('level').textContent = r ? fmt(r.rmsDb, 1, ' dBFS') : '--';
 
   const h = state.history;
-  if (h.length > 5 && voiced) {
-    const same = h.filter((p) => p.midi === r.note.midi).map((p) => p.cents);
+  if (h.length > 5 && s) {
+    const same = h.filter((p) => p.midi === s.note.midi).map((p) => p.cents);
     const mean = same.reduce((s, v) => s + v, 0) / same.length;
     const sd = Math.sqrt(same.reduce((s, v) => s + (v - mean) ** 2, 0) / same.length);
     $('stability').textContent = `±${sd.toFixed(1)} cent（${same.length}点）`;
@@ -306,7 +312,7 @@ function render() {
 
 function report() {
   const ctx = state.ctx;
-  const r = state.latest;
+  const lv = state.lastVoiced;
   const proc = [...state.procTimes].sort((a, b) => a - b);
   const data = {
     time: new Date().toISOString(),
@@ -321,13 +327,17 @@ function report() {
     procMaxMs: proc.length ? proc[proc.length - 1] : null,
     loopback: state.loopback,
     test: state.testInfo,
-    last: r && r.voiced ? {
-      note: r.note.name,
-      cents: +r.note.cents.toFixed(2),
-      freq: +r.freq.toFixed(3),
-      clarity: +r.clarity.toFixed(3),
-      rmsDb: +r.rmsDb.toFixed(1),
-      harmonicsRelDb: r.harmonics.map((x) => +x.relDb.toFixed(2)),
+    stability: $('stability').textContent,
+    // 押した瞬間に音が出ていなくても、最後に音程が取れたフレームを記録する
+    last: lv ? {
+      note: lv.note.name,
+      cents: +lv.note.cents.toFixed(2),
+      freq: +lv.freq.toFixed(3),
+      yinFreq: +lv.yinFreq.toFixed(3),
+      clarity: +lv.clarity.toFixed(3),
+      rmsDb: +lv.rmsDb.toFixed(1),
+      shown: lv.stable ? lv.stable.note.name : null,
+      harmonicsRelDb: lv.harmonics ? lv.harmonics.map((x) => +x.relDb.toFixed(2)) : null,
     } : null,
   };
   return JSON.stringify(data, null, 2);

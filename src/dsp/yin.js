@@ -118,4 +118,28 @@ export class Yin {
       tau,
     };
   }
+
+  /**
+   * 直前の detect() の結果を使い、tau 付近（±3%）の谷を探して周期候補として評価する。
+   * オクターブ下の候補（2τ）を確かめるのに使う。
+   * @returns {{ freq: number, clarity: number, tau: number } | null}
+   */
+  candidateAt(tau) {
+    const { cmndf, diff, tauMax } = this;
+    const lo = Math.max(2, Math.floor(tau * 0.97));
+    const hi = Math.min(tauMax - 1, Math.ceil(tau * 1.03));
+    if (lo >= hi) return null;
+    let best = lo;
+    for (let t = lo + 1; t <= hi; t++) if (cmndf[t] < cmndf[best]) best = t;
+    if (best === lo || best === hi) return null;
+    const a = diff[best - 1], b = diff[best], c = diff[best + 1];
+    const denom = a - 2 * b + c;
+    const shift = denom > 0 ? (0.5 * (a - c)) / denom : 0;
+    const refined = best + Math.max(-1, Math.min(1, shift));
+    return {
+      freq: this.sampleRate / refined,
+      clarity: Math.max(0, Math.min(1, 1 - cmndf[best])),
+      tau: refined,
+    };
+  }
 }

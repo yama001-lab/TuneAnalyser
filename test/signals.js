@@ -43,3 +43,23 @@ export function tone({ f0, sampleRate, seconds, amps, inharmonicity = 0, noise =
 }
 
 export const dbToAmp = (db) => Math.pow(10, db / 20);
+
+/**
+ * 他の楽器の音を混ぜる。200〜800Hz のランダムな音を 120〜320ms ごとに切り替える
+ * @param {Float32Array} target  上書きで加算する
+ * @param {number} levelDb       target の各音（振幅0.2基準）に対する相対レベル
+ */
+export function addInterference(target, sampleRate, levelDb, seed = 5) {
+  let s = seed >>> 0;
+  const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+  let pos = 0;
+  while (pos < target.length) {
+    const len = Math.round((0.12 + rnd() * 0.2) * sampleRate);
+    const f = 200 * Math.pow(2, rnd() * 2);
+    const amps = [0, -6, -12].map(dbToAmp).map((a) => a * 0.2 * dbToAmp(levelDb));
+    const t = tone({ f0: f, sampleRate, seconds: len / sampleRate, amps, seed: pos + 1 });
+    for (let i = 0; i < t.length && pos + i < target.length; i++) target[pos + i] += t[i] * Math.sin((Math.PI * i) / t.length);
+    pos += len;
+  }
+  return target;
+}

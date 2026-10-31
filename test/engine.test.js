@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AnalysisEngine } from '../src/engine.js';
 import { centsBetween, freqToNote, midiToFreq } from '../src/dsp/notes.js';
-import { tone, dbToAmp } from './signals.js';
+import { tone, dbToAmp, addInterference } from './signals.js';
 
 // コントラバス開放弦（A=440）と高めの音
 const NOTES = {
@@ -112,4 +112,93 @@ test('基準ピッチ A=442 でセントが変わる', () => {
   assert.equal(n.name, 'A4');
   assert.ok(Math.abs(n.cents - centsBetween(440, 442)) < 1e-9);
   assert.ok(Math.abs(freqToNote(midiToFreq(28, 442), 442).cents) < 1e-9);
+});
+
+// ---- オクターブ誤り（実機で A線が A2 と表示された件） ----
+
+// 内蔵マイクで基音が弱く、さらに奇数次倍音も弱いと、YIN は周期の半分を選びやすい
+const WEAK_ODD = [-30, 0, -25, -4, -25, -8].map(dbToAmp).map((a) => a * 0.2);
+
+for (const [name, midi] of [['E1', 28], ['A1', 33], ['D2', 38]]) {
+  for (const noise of [0, 0.03]) {
+    test(`${name}: 基音と奇数次倍音が弱くても 1オクターブ上と誤らない (noise ${noise})`, () => {
+      const sampleRate = 48000;
+      const f0 = midiToFreq(midi);
+      const sig = tone({ f0, sampleRate, seconds: 0.6, amps: WEAK_ODD, noise });
+      const { results } = analyzeTone(sig, sampleRate);
+      const voiced = results.filter((r) => r.voiced);
+      assert.ok(voiced.length > 10);
+      for (const r of voiced) assert.equal(r.note.name, name);
+    });
+  }
+}
+
+for (const [name, midi, amps] of [
+  ['A2', 45, BOWED],
+  ['A2', 45, [0, -12, -20, -25, -30].map(dbToAmp).map((a) => a * 0.2)],
+  ['D3', 50, BOWED],
+  ['G4', 67, [0.2]],
+]) {
+  test(`${name}: 本当に高い音を 1オクターブ下と誤らない`, () => {
+    const sampleRate = 48000;
+    const sig = tone({ f0: midiToFreq(midi), sampleRate, seconds: 0.6, amps, noise: 0.03 });
+    const { results } = analyzeTone(sig, sampleRate);
+    for (const r of results.filter((r) => r.voiced)) assert.equal(r.note.name, name);
+  });
+}
+
+// ---- 他の楽器の音が鳴っている環境 ----
+
+test('A1: 他の楽器の音(-6dB)が混ざっても表示用ピッチは A1 のまま、ぶれ 5セント未満', () => {
+  const sampleRate = 48000;
+  const f0 = midiToFreq(33);
+  const sig = tone({ f0, sampleRate, seconds: 4, amps: [-24, -9, -7, -6, -7, -8].map(dbToAmp).map((a) => a * 0.2), noise: 0.003 });
+  addInterference(sig, sampleRate, -6);
+  const { results } = analyzeTone(sig, sampleRate);
+  const shown = results.slice(15).map((r) => r.stable);
+  assert.ok(shown.every((s) => s && s.note.name === 'A1'), 'A1 以外が表示された');
+  const cents = shown.map((s) => centsBetween(s.freq, f0));
+  const mean = cents.reduce((a, b) => a + b, 0) / cents.length;
+  const sd = Math.sqrt(cents.reduce((a, c) => a + (c - mean) ** 2, 0) / cents.length);
+  assert.ok(sd < 5, `sd ${sd.toFixed(2)} cents`);
+});
+
+test('E1: 弦のインハーモニシティ（B=3e-4）があってもピッチ誤差 3セント未満', () => {
+  const sampleRate = 48000;
+  const f0 = midiToFreq(28);
+  const sig = tone({ f0, sampleRate, seconds: 0.5, amps: BOWED, inharmonicity: 3e-4 });
+  const { last } = analyzeTone(sig, sampleRate);
+  assert.ok(Math.abs(centsBetween(last.freq, f0)) < 3, `${centsBetween(last.freq, f0)}`);
+});
+
+test('音を変えたら 200ms 以内に表示が切り替わる（前の弦が鳴り残っていても）', () => {
+  const sampleRate = 48000;
+  const seg = 0.6;
+  const seq = [['A1', 33], ['D2', 38], ['G2', 43], ['A2', 45], ['A1', 33], ['E1', 28]];
+  const n = Math.round(seg * sampleRate);
+  const sig = new Float32Array(n * seq.length + n);
+  for (const profile of [[-24, -9, -7, -6, -7, -8], [0, -3, -6, -9, -12]]) {
+  sig.fill(0);
+  const amps = profile.map(dbToAmp).map((a) => a * 0.2);
+  seq.forEach(([, midi], i) => {
+    // 弓で弾いている区間 + その後、開放弦が -6dB から減衰しながら鳴り残る
+    const t = tone({ f0: midiToFreq(midi), sampleRate, seconds: seg * 2, amps, noise: 0.002, seed: i + 1 });
+    for (let j = 0; j < t.length; j++) {
+      const ring = j < n ? 1 : 0.5 * Math.exp(-(j - n) / sampleRate / 0.5);
+      if (i * n + j < sig.length) sig[i * n + j] += t[j] * ring;
+    }
+  });
+  const engine = new AnalysisEngine(sampleRate);
+  const shown = [];
+  for (let i = 0; i + 1024 <= sig.length; i += 1024) {
+    engine.push(sig.subarray(i, i + 1024));
+    shown.push({ t: (i + 1024) / sampleRate, name: engine.analyze().stable?.note.name });
+  }
+  seq.forEach(([name], i) => {
+    const from = i * seg + 0.2, to = (i + 1) * seg;
+    const inSeg = shown.filter((s) => s.t >= from && s.t < to);
+    const wrong = inSeg.filter((s) => s.name !== name);
+    assert.equal(wrong.length, 0, `${name}: ${wrong.map((s) => `${s.t.toFixed(2)}s ${s.name}`).join(', ')}`);
+  });
+  }
 });
