@@ -103,3 +103,51 @@ export function measureHarmonics(buffer, sampleRate, f0, options = {}) {
   }
   return { harmonics, windowSize: n };
 }
+
+/**
+ * f の半分を基音とみなしたとき、奇数次（f/2, 3f/2, 5f/2, 7f/2）に偶数次（f, 2f, 3f, 4f）と比べて
+ * どれだけエネルギーがあるかを調べる。多ければ本当の基音は f/2（オクターブ上に誤検出している）。
+ * スマホ内蔵マイクは低域が弱く、コントラバスの基音と3次倍音が小さいと YIN が半分の周期を選びやすい。
+ * @returns {{ ratioDb: number, oddCount: number }}
+ *   ratioDb: 奇数次÷偶数次のエネルギー比(dB)
+ *   oddCount: 最も強い偶数次から -35dB 以内にある奇数次の本数（他の楽器の音が1本だけ重なった場合と区別する）
+ */
+export function subOctaveEvidence(buffer, sampleRate, f) {
+  const m = measureHarmonics(buffer, sampleRate, f / 2, { count: 8, searchCents: 10 });
+  if (!m) return { ratioDb: -Infinity, oddCount: 0 };
+  let odd = 0, even = 0, maxEven = 0;
+  for (const h of m.harmonics) {
+    if (h.n % 2) odd += h.amp * h.amp;
+    else {
+      even += h.amp * h.amp;
+      maxEven = Math.max(maxEven, h.amp);
+    }
+  }
+  const floor = maxEven * Math.pow(10, -35 / 20);
+  const oddCount = m.harmonics.filter((h) => h.n % 2 && h.amp >= floor).length;
+  return { ratioDb: 10 * Math.log10((odd + 1e-30) / (even + 1e-30)), oddCount };
+}
+
+/**
+ * 倍音のピーク周波数から基本周波数を推定し直す（f_k / k の、振幅で重み付けした中央値）。
+ * 倍音ごとの狭い帯域だけを見るので、倍音の間にある他の楽器の音の影響を受けにくい。
+ * 中央値なので、たまたま他の楽器の音が重なった倍音が1本あっても引きずられない。
+ * @param {Harmonic[]} harmonics
+ * @param {number} [floorDb=-40] 最も強い倍音からこれ以上弱い倍音は使わない
+ */
+export function refineF0(harmonics, floorDb = -40) {
+  const maxAmp = Math.max(...harmonics.map((h) => h.amp));
+  if (!(maxAmp > 0)) return 0;
+  const floor = maxAmp * Math.pow(10, floorDb / 20);
+  const est = harmonics
+    .filter((h) => h.amp >= floor && h.amp > 0)
+    .map((h) => ({ f: h.freq / h.n, w: h.amp }))
+    .sort((a, b) => a.f - b.f);
+  const total = est.reduce((s, e) => s + e.w, 0);
+  let acc = 0;
+  for (const e of est) {
+    acc += e.w;
+    if (acc >= total / 2) return e.f;
+  }
+  return 0;
+}
